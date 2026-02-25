@@ -221,6 +221,14 @@ Modifications to the skill ecosystem, other plugins, or Claude's configuration.
 - **Benign false-positive:** Legitimately similar but unrelated names
 - **Severity:** MEDIUM
 
+### SC-05: Weak Repository Security Posture
+
+- **Vector:** Repository lacks basic supply chain security practices, making it easier for attackers to inject malicious code via compromised CI, unreviewed PRs, or dependency confusion
+- **Detection:** Query the OpenSSF Security Scorecard API (`https://api.securityscorecards.dev/projects/github.com/{owner}/{repo}`). Flag repositories with overall score < 4.0 or critical check failures (Code-Review < 5, Dangerous-Workflow < 5, Binary-Artifacts < 5, Vulnerabilities < 5)
+- **Malicious example:** A skill repo with no branch protection and no code review requirement — anyone with write access can push directly to main
+- **Benign false-positive:** New or small repos that haven't configured CI/CD yet but have clean code
+- **Severity:** MEDIUM (overall score 4.0–6.9), HIGH (overall score < 4.0 or Dangerous-Workflow/Binary-Artifacts failures)
+
 ---
 
 ## BD — Backdoor

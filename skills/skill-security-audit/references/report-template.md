@@ -32,6 +32,23 @@ Use this template to produce the final structured report after completing all si
 
 ---
 
+## Repository Scorecard
+
+**Source:** [OpenSSF Security Scorecards](https://securityscorecards.dev/)
+**Score:** [n]/10 — [LOW/MEDIUM/HIGH risk]
+**Scanned:** [date] (commit: [short SHA])
+
+| Check | Score | Status |
+|-------|-------|--------|
+| [check name] | [score]/10 | [reason summary] |
+| ... | ... | ... |
+
+[If no scorecard available: "No OpenSSF Security Scorecard available for this repository. The repository has not been evaluated for supply chain security practices."]
+
+[If target is a local path with no GitHub remote: "Scorecard not available — target is a local path with no GitHub remote."]
+
+---
+
 ## Permission Summary
 
 | File | allowed-tools | Risk Level |

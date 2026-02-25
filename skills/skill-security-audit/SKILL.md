@@ -22,6 +22,7 @@ Load the reference files before starting:
 - `references/prompt-injection-patterns.md` — regex patterns for prompt injection
 - `references/code-risk-patterns.md` — shell/script risk patterns
 - `references/frontmatter-policy.md` — allowed-tools risk matrix
+- `references/scorecard-policy.md` — OpenSSF Scorecard interpretation guide
 - `references/report-template.md` — output format
 
 ---
@@ -33,10 +34,19 @@ Load the reference files before starting:
 ### If the target is a GitHub URL:
 1. Clone the repository to a temporary directory: `/tmp/skill-audit-<random>/`
 2. Set `TARGET_DIR` to the cloned path
+3. **Query the OpenSSF Security Scorecard** for the repository:
+   - Extract the `owner/repo` path from the GitHub URL
+   - Run: `curl -s "https://api.securityscorecards.dev/projects/github.com/${OWNER}/${REPO}"`
+   - Parse the JSON response (see `references/scorecard-policy.md` for interpretation)
+   - If the API returns a scorecard: record the overall score, check results, and generate findings for any failed security-critical checks
+   - If the API returns 404: record an INFO finding that no scorecard exists
+   - If the API errors: note the error and continue (do not block the audit)
+   - Include the scorecard data in the final report
 
 ### If the target is a local path:
 1. Verify the path exists
 2. Set `TARGET_DIR` to the provided path
+3. If the path is inside a git repository with a GitHub remote, extract the remote URL and **query the OpenSSF Security Scorecard** as described above. If no GitHub remote is found, skip the scorecard check and note it as INFO.
 
 ### Build the file manifest:
 1. Use `Glob` to list all files recursively in `TARGET_DIR`

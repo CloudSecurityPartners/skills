@@ -6,7 +6,7 @@ Security audit toolkit for Claude Code skills and plugins. Detects prompt inject
 
 Performs a six-phase security audit of any Claude Code skill or plugin:
 
-1. **Target Acquisition** — clone repo or verify local path, build file manifest
+1. **Target Acquisition** — clone repo or verify local path, build file manifest, query OpenSSF Security Scorecard
 2. **Permissions Analysis** — assess `allowed-tools` against purpose, flag dangerous combinations
 3. **Prompt Injection Analysis** — detect override attempts, concealment, authority manipulation, encoded content
 4. **Code Execution Analysis** — scan scripts and inline code for network ops, sensitive file access, obfuscation
@@ -49,7 +49,7 @@ Then invoke directly by name when you want to audit a target.
 | PI | Prompt Injection | Override instructions, concealment, authority manipulation |
 | CE | Code Execution | Shell commands, eval/exec, decode-then-execute chains |
 | DE | Data Exfiltration | curl/wget to external URLs, DNS exfil, env harvesting |
-| SC | Supply Chain | Modifying other plugins, settings, CLAUDE.md |
+| SC | Supply Chain | Modifying other plugins, settings, CLAUDE.md, weak repo scorecard |
 | BD | Backdoor | Obfuscated payloads, base64, zero-width characters |
 | PE | Permission Escalation | Overly broad allowed-tools, dangerous tool combos |
 
