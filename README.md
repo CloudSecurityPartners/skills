@@ -17,30 +17,39 @@ Produces a structured report with findings by severity and a verdict: **SAFE**, 
 
 ## Installation
 
-### As a plugin
+### From the marketplace
 
-Add to your Claude Code plugins:
-
-```bash
-claude plugin add /path/to/skill-security
-```
-
-Then use the slash command:
+1. Add the marketplace:
 
 ```
-/skill-audit https://github.com/someone/their-skill
-/skill-audit /path/to/local/skill
+/plugin marketplace add CloudSecurityPartners/skills
 ```
+
+2. Install the plugin:
+
+```
+/plugin install skill-security@CloudSecurityPartners-skills
+```
+
+Or use `/plugin` interactively and browse the **Discover** tab.
 
 ### As a personal skill
 
-Symlink the skill into your Claude skills directory:
+Clone the repo and symlink into your Claude skills directory:
 
 ```bash
-ln -s /path/to/skill-security/skills/skill-security-audit ~/.claude/skills/skill-security-audit
+git clone https://github.com/CloudSecurityPartners/skills.git
+ln -s "$(pwd)/skills/skills/skill-security-audit" ~/.claude/skills/skill-security-audit
 ```
 
-Then invoke directly by name when you want to audit a target.
+## Usage
+
+Run the slash command with a GitHub URL or local path:
+
+```
+/skill-security-audit https://github.com/someone/their-skill
+/skill-security-audit /path/to/local/skill
+```
 
 ## Threat categories
 
