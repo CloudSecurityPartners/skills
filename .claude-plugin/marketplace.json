@@ -1,0 +1,15 @@
+{
+  "name": "CloudSecurityPartners-skills",
+  "description": "Security skills for Claude Code",
+  "owner": {
+    "name": "Cloud Security Partners"
+  },
+  "plugins": [
+    {
+      "name": "skill-security",
+      "version": "1.0.0",
+      "description": "Security audit toolkit for Claude Code skills and plugins — detects prompt injection, backdoors, and permission escalation before installation",
+      "source": "./"
+    }
+  ]
+}
