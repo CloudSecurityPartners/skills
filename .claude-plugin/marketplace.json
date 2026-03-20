@@ -1,6 +1,6 @@
 {
   "name": "CloudSecurityPartners-skills",
-  "description": "Security skills for Claude Code",
+  "description": "Security skills for Claude Code — skill auditing and codebase security review",
   "owner": {
     "name": "Cloud Security Partners"
   },
@@ -9,6 +9,12 @@
       "name": "skill-security",
       "version": "1.0.0",
       "description": "Security audit toolkit for Claude Code skills and plugins — detects prompt injection, backdoors, and permission escalation before installation",
+      "source": "./"
+    },
+    {
+      "name": "security-review",
+      "version": "1.0.0",
+      "description": "Conduct codebase security reviews using an agent team with deterministic tools, expert triage, and consensus-driven round table",
       "source": "./"
     }
   ]

@@ -1,7 +1,7 @@
 {
   "name": "skill-security",
-  "version": "1.0.0",
-  "description": "Security audit toolkit for Claude Code skills and plugins — detects prompt injection, backdoors, and permission escalation before installation",
+  "version": "1.1.0",
+  "description": "Security toolkit for Claude Code — audit skills/plugins for prompt injection and backdoors, or conduct full codebase security reviews with an agent team",
   "author": {
     "name": "Michael McCabe"
   }
