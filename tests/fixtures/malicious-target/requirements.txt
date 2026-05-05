@@ -1,0 +1,6 @@
+# tests/fixtures/malicious-target/requirements.txt
+# Pinned versions are deliberately vulnerable so trivy fs --scanners vuln finds CVEs.
+flask==0.12.2
+urllib3==1.24.1
+requests==2.19.0
+PyYAML==5.1
