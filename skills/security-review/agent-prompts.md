@@ -2,7 +2,10 @@
 
 Each section below is a complete prompt for one team member. The team lead passes the relevant section as the `prompt` parameter when spawning the agent via the Agent tool with `team_name="security-review"`.
 
-**Template variables:** Replace `{PROJECT_ROOT}` with the absolute path to the project being reviewed.
+**Template variables:**
+- `{PROJECT_ROOT}` — absolute path to the project being reviewed
+- `{PROJECT_NAME}` — display name of the project (used in the team description and report title)
+- `{SEMGREP_PRO}` — `true` to enable Semgrep Pro engine (`--pro` flag) in the tool-runner; default `false`
 
 **Team behavior:** Each agent should mark its assigned task as `in_progress` when starting and `completed` when done. After completing work, agents should check TaskList for new tasks (e.g., round table feedback tasks created by the moderator).
 
@@ -27,9 +30,8 @@ Mark your assigned task as in_progress, then explore the project thoroughly and 
 4. **Trust Boundaries** — where user input crosses into trusted contexts (controllers, background jobs, external service calls)
 5. **Authentication & Authorization** — how users authenticate, how permissions are enforced, role model
 6. **External Integrations** — databases, message queues, file storage, third-party APIs
-7. **High-Risk Areas** — patterns that warrant deep manual review (e.g., dynamic class loading, raw SQL, file uploads, deserialization, eval-like constructs)
+7. **High-Risk Areas** — patterns that warrant deep manual review (e.g., dynamic class loading, raw SQL, file uploads, deserialization, eval-like constructs, GraphQL endpoints, message queue consumers, background jobs that touch user-controlled input)
 8. **Existing Security Controls** — what's already in place (input validation, CSRF protection, rate limiting, audit logging, dependency scanning)
-
 Be thorough but concise. Focus on information that security reviewers need. Do not run any security tools — your job is analysis and documentation only.
 
 Write the document in markdown. Use file paths relative to the project root.
@@ -56,21 +58,41 @@ Run the following tools and save output to {PROJECT_ROOT}/security-review/raw/:
 
 ### 1. Semgrep (Static Analysis)
 
+**Pro engine:** SEMGREP_PRO is `{SEMGREP_PRO}` (default `false`). When `true`, add `--pro` to the command below — this enables interfile/interprocedural taint analysis and Pro languages. Requires the host to have run `semgrep login` and `semgrep install-semgrep-pro` previously.
+
 Run semgrep with auto-detection of rules appropriate for the project's language/framework:
+
 ```bash
+# Default (OSS engine):
 semgrep scan --json --output {PROJECT_ROOT}/security-review/raw/semgrep-results.json {PROJECT_ROOT}
+
+# When SEMGREP_PRO is true:
+semgrep scan --pro --json --output {PROJECT_ROOT}/security-review/raw/semgrep-results.json {PROJECT_ROOT}
 ```
-If the default ruleset is insufficient, add relevant rulesets (e.g., `--config p/ruby` or `--config p/rails` for Ruby/Rails projects). Use `--config auto` if available.
+
+If the default ruleset is insufficient, add language/framework-specific rulesets based on the project overview:
+- Python: `--config p/python`, `--config p/django`, `--config p/flask`
+- Ruby/Rails: `--config p/ruby`, `--config p/rails`
+- JavaScript/Node: `--config p/javascript`, `--config p/nodejs`, `--config p/express`
+- Go: `--config p/golang`
+- Java: `--config p/java`
+- Browse https://semgrep.dev/explore for additional packs
+
+Use `--config auto` if available.
+
+**If `--pro` was requested but fails** (Pro engine not installed, not logged in, or rate limited): re-run with stderr visible, write the error to `{PROJECT_ROOT}/security-review/raw/tool-runner-errors.md`, and notify the team lead via task message. Do NOT silently fall back to the OSS engine — the user explicitly requested Pro, and a setup gap should be surfaced rather than masked.
 
 ### 2. Trufflehog (Secrets Detection)
 
-Scan the repository including git history for exposed secrets:
+Trufflehog emits **JSON Lines** (one finding per line), not a single JSON document. Use `.jsonl` and write to two separate files. Send stderr to `/dev/null` so it does not corrupt the output stream.
+
+Scan the working tree:
 ```bash
-trufflehog filesystem --json {PROJECT_ROOT} > {PROJECT_ROOT}/security-review/raw/trufflehog-results.json 2>&1
+trufflehog filesystem --json {PROJECT_ROOT} > {PROJECT_ROOT}/security-review/raw/trufflehog-fs.jsonl 2>/dev/null
 ```
-Also scan git history:
+Scan git history:
 ```bash
-trufflehog git file://{PROJECT_ROOT} --json >> {PROJECT_ROOT}/security-review/raw/trufflehog-results.json 2>&1
+trufflehog git file://{PROJECT_ROOT} --json > {PROJECT_ROOT}/security-review/raw/trufflehog-git.jsonl 2>/dev/null
 ```
 
 ### 3. Trivy (Dependency Vulnerabilities)
@@ -82,15 +104,39 @@ trivy fs --format json --output {PROJECT_ROOT}/security-review/raw/trivy-results
 
 ### 4. Additional Tool Assessment
 
-After running the three required tools, assess whether additional tool CATEGORIES would provide value. Do not recommend alternatives to semgrep, trufflehog, or trivy — instead consider whether tools covering different analysis categories (e.g., Rails-specific static analysis, infrastructure-as-code scanning, API specification linting) would be useful.
+After running the three required tools, assess whether additional tool CATEGORIES would provide value. Do not recommend alternatives to semgrep, trufflehog, or trivy — instead consider whether tools covering different analysis categories would be useful. Examples to consider based on what the project overview reveals:
+
+- **Language/framework-specific SAST** that complements semgrep — choose based on project stack:
+  - Ruby/Rails: `brakeman`
+  - Python: `bandit` (general), `pyre`/`pysa` (taint analysis)
+  - JavaScript/Node: `njsscan`, `eslint-plugin-security`
+  - Go: `gosec`
+  - Java: `spotbugs` with the `find-sec-bugs` plugin
+- **Infrastructure-as-code** — `checkov` or `tfsec` if Terraform/CloudFormation is present
+- **API specification linting** — `spectral` if OpenAPI/AsyncAPI specs exist
+- **GraphQL audit** — if the project exposes GraphQL. Detection signals across stacks: `Gemfile`/`graphql-ruby` + `app/graphql/`; `requirements.txt`/`pyproject.toml` containing `graphene`/`strawberry-graphql`/`ariadne`; `package.json` containing `apollo-server`/`graphql-yoga`/`graphql-tools`/`@nestjs/graphql`; or a `schema.graphql`/`schema.json` at the repo root.
+  - `graphql-cop` — quick OWASP-style audit (introspection, depth, alias batching, field suggestions). **Requires a live endpoint** — only useful if the user has a running instance. Save output to `{PROJECT_ROOT}/security-review/raw/graphql-cop-results.txt`.
+  - `clairvoyance` — schema reconstruction when introspection is disabled. Also requires a live endpoint.
+  - If no live endpoint is available, recommend the `targeted-expert` cover GraphQL surface from source review (the targeted-expert prompt already includes a GraphQL focus area gated on detection).
+- **Container scanning** — `trivy image <ref>` if Dockerfiles are present and an image is built
 
 For each recommended tool:
 1. Explain what category it covers that the existing tools do not
-2. Ask the user if they would like you to install and run it
+2. Ask the user if they would like you to install and run it (and provide a live endpoint URL if the tool requires one)
 3. If approved, install the tool, run it, and save output to {PROJECT_ROOT}/security-review/raw/ in JSON format (or the tool's default format if JSON is unavailable)
 4. If declined, note the recommendation in {PROJECT_ROOT}/security-review/raw/additional-tool-recommendations.md for the report
 
-Verify all output files were created and contain valid output. When done, mark your task as completed and check TaskList for any new work.
+### Validation
+
+Before marking the task complete, validate each output file. Do not silently let downstream agents work from missing or malformed data:
+
+- `semgrep-results.json` and `trivy-results.json` must parse as valid JSON. Validate with `jq . <file> >/dev/null` (or `python3 -c "import json,sys; json.load(open(sys.argv[1]))" <file>`).
+- `trufflehog-fs.jsonl` and `trufflehog-git.jsonl` must be valid JSON Lines — each non-empty line should parse. Validate with `jq -c . <file> >/dev/null`. An empty file is acceptable (no secrets found).
+- Check the exit code of each tool when running. A non-zero exit with empty/malformed output indicates failure.
+
+If a tool fails, re-run it once with stderr visible (drop the `2>/dev/null`) to diagnose. If it still fails, write a description of the failure to `{PROJECT_ROOT}/security-review/raw/tool-runner-errors.md` and proceed with whatever did succeed — do NOT block the entire review on one tool, but make the gap explicit so the report writer can document it.
+
+When done, mark your task as completed and check TaskList for any new work.
 ```
 
 ---
@@ -108,9 +154,10 @@ TEAM: security-review
 
 Mark your assigned task as in_progress. Then read:
 - {PROJECT_ROOT}/security-review/raw/project-overview.md (project context)
-- {PROJECT_ROOT}/security-review/raw/semgrep-results.json (semgrep findings)
-- {PROJECT_ROOT}/security-review/raw/trufflehog-results.json (trufflehog findings)
-- Any additional SAST tool output in {PROJECT_ROOT}/security-review/raw/ (e.g., brakeman-results.json if present). Check the directory listing for any extra result files beyond the three core tools.
+- {PROJECT_ROOT}/security-review/raw/semgrep-results.json (semgrep findings — single JSON document)
+- {PROJECT_ROOT}/security-review/raw/trufflehog-fs.jsonl and trufflehog-git.jsonl (trufflehog findings — JSON Lines, one finding per line; an empty file means no secrets found)
+- {PROJECT_ROOT}/security-review/raw/tool-runner-errors.md if present (documents any tool failures — note coverage gaps in your triage)
+- Any additional SAST tool output in {PROJECT_ROOT}/security-review/raw/ (e.g., `brakeman-results.json`, `bandit-results.json`, `njsscan-results.json`, `gosec-results.json` if present). Check the directory listing for any extra result files beyond the three core tools.
 
 For EACH finding across ALL tool outputs:
 1. Read the actual source code at the reported file/line
@@ -164,13 +211,13 @@ TEAM: security-review
 Mark your assigned task as in_progress. Then read:
 - {PROJECT_ROOT}/security-review/raw/project-overview.md (project context)
 - {PROJECT_ROOT}/security-review/raw/trivy-results.json (trivy findings)
-- Any additional dependency scanning output in {PROJECT_ROOT}/security-review/raw/ (e.g., bundler-audit-results.json if present).
+- Any additional dependency scanning output in {PROJECT_ROOT}/security-review/raw/ (e.g., `bundler-audit-results.json`, `pip-audit-results.json`, `npm-audit-results.json`, `osv-scanner-results.json` if present).
 
 For EACH CVE/vulnerability reported:
-1. Identify the affected gem/package and its version
+1. Identify the affected package and its version (gem, pypi package, npm module, go module, maven artifact, etc.)
 2. Research what the vulnerability actually does — which function/feature is affected?
 3. Search the codebase to determine if the vulnerable code path is reachable:
-   - Is the vulnerable feature of the gem actually used? (not just listed as a dependency)
+   - Is the vulnerable feature of the package actually used? (not just listed as a dependency)
    - Is it a transitive dependency whose vulnerable API is never called directly?
    - Are there existing mitigations (input validation, network isolation) that reduce exploitability?
 4. Classify as: EXPLOITABLE, NOT EXPLOITABLE, or UNCERTAIN
@@ -183,7 +230,7 @@ Write your analysis to {PROJECT_ROOT}/security-review/triage/dependency-triage.m
 
 For each exploitable CVE:
 - **CVE ID:** The CVE identifier
-- **Affected Package:** Gem/package name and installed version
+- **Affected Package:** Package name (gem, pypi, npm, go module, etc.) and installed version
 - **Fixed Version:** Version that resolves the vulnerability (if known)
 - **Severity:** Critical / High / Medium / Low (with brief rationale based on THIS application's exposure)
 - **Vulnerability Description:** What the CVE is
@@ -226,13 +273,19 @@ Then conduct deep-dive analysis of these high-risk areas (and any others identif
 
 ### Focus Areas
 
-1. **Dynamic Class Instantiation** — Any use of `constantize`, `safe_constantize`, `eval`, `send`, or `public_send` where input could be influenced by users or external data. Trace the data flow from input to invocation.
+1. **Dynamic Code Execution / Reflection** — Any pattern where user-influenced input reaches a code-evaluation primitive. Trace the data flow from input to invocation. Patterns to look for, by language:
+   - **Ruby:** `eval`, `instance_eval`, `class_eval`, `send`, `public_send`, `constantize`, `safe_constantize`, `Marshal.load` on untrusted data
+   - **Python:** `eval`, `exec`, `compile`, `__import__`, `getattr`/`setattr` with untrusted attribute name, `pickle.loads`, `yaml.load` without `SafeLoader`, `subprocess` with `shell=True` and interpolated input
+   - **JavaScript/Node:** `eval`, `Function(...)`, `vm.runInContext`/`vm.runInNewContext`, `setTimeout`/`setInterval` with string arg, `require()` with dynamic path
+   - **Go:** `text/template` or `html/template` with attacker-controlled template body; reflection `reflect.ValueOf().Call(...)`
+   - **Java:** reflection (`Class.forName`, `Method.invoke`), `ScriptEngine.eval`, deserialization of untrusted streams
 
-2. **Authorization Completeness** — Check every controller action for proper authorization enforcement. Look for:
-   - Actions missing `authorize` calls
-   - Policy methods that are too permissive
-   - Scope bypasses where records are fetched without policy scoping
-   - Role escalation paths
+2. **Authorization Completeness** — Check every route/controller/handler for proper authorization enforcement. Look for the framework-appropriate pattern:
+   - **Rails:** missing `authorize` calls (Pundit), `cancan` `authorize!`, scope bypasses (`policy_scope`)
+   - **Django:** missing `@permission_required` / `@login_required` decorators, `LoginRequiredMixin`/`PermissionRequiredMixin`, queryset scoping in `get_queryset`
+   - **Flask/FastAPI:** missing `Depends(...)` dependency for auth, missing `before_request` checks, decorator-style auth applied inconsistently
+   - **Express/Node:** missing auth middleware on routes, manual JWT verification skipped on some endpoints
+   - **Generic patterns:** policy methods too permissive; records fetched without ownership filtering; role escalation paths; admin endpoints reachable without admin check
 
 3. **Authentication & Session Management** — JWT implementation, token lifecycle, session invalidation, password reset flows, 2FA bypass potential.
 
@@ -241,6 +294,33 @@ Then conduct deep-dive analysis of these high-risk areas (and any others identif
 5. **Message Queue Trust** — Are messages from queues (SQS, Redis, etc.) validated before processing? Could a compromised queue lead to code execution or data manipulation?
 
 6. **State Machine Integrity** — Can workflow states be manipulated to skip required steps? Are transition guards enforced server-side?
+
+7. **GraphQL Attack Surface** — Apply only if the project exposes GraphQL. Detection signals: `graphql`/`graphql-ruby`/`graphql-pro` in Gemfile + `app/graphql/`; `graphene`/`strawberry-graphql`/`ariadne` in `requirements.txt`/`pyproject.toml`; `apollo-server`/`graphql-yoga`/`graphql-tools`/`@nestjs/graphql` in `package.json`; or a `schema.graphql`/`schema.json` at repo root. For each item below, cite specific resolver/field/schema locations:
+   - **Introspection in production:** Is introspection disabled in production environments? In graphql-ruby look for `disable_introspection_entry_points` or env-gated `introspection: false`. Exposed schemas drastically lower attacker effort to map the API.
+   - **Query depth & complexity limits:** Is `max_depth`, `max_complexity`, or a custom complexity analyzer configured on the schema? Missing limits = trivial DoS via deeply nested queries.
+   - **Field-level authorization:** Object-level auth (Pundit `policy.show?`) does NOT cover individual fields. Check resolvers and field definitions for `authorized?`/`visible?`/`accessible?` callbacks. A field exposing PII or admin-only data without its own auth check leaks even when the parent object is authorized.
+   - **Alias batching abuse:** Can a single GraphQL request issue N copies of a sensitive operation (e.g., `login`, `passwordReset`) via field aliases to bypass per-request rate limiting? Rate limiters that count requests rather than fields are vulnerable.
+   - **Mutation rate limiting:** Expensive mutations (password reset, account enumeration via lookup, OTP send) need rate limits. Easy to miss because GraphQL has one HTTP endpoint — application-layer counters must be field-aware.
+   - **Mutation input validation:** Permissive `Input` types are GraphQL's mass-assignment equivalent. Verify only intended fields are exposed and each is validated server-side.
+   - **Persisted/allowlisted queries:** If the API is for a known client, are arbitrary queries blocked in production (allowlist of known query hashes)? Reduces both DoS and information disclosure surface.
+
+8. **Untrusted Deserialization** — Distinct from generic dynamic execution because the sinks are unobtrusive (a single readObject/unserialize call can give RCE). Review every place a binary or structured payload from a network/queue/cookie/file gets deserialized:
+   - **Java:** `ObjectInputStream.readObject` on untrusted streams (classic gadget chains via Commons Collections / Spring / etc.); `XMLDecoder` on untrusted XML; Jackson with default-typing or `enableDefaultTyping`; `SnakeYAML` `Yaml().load` (use `SafeConstructor`)
+   - **.NET / C#:** `BinaryFormatter` (deprecated but still appears), `LosFormatter`, `NetDataContractSerializer`, `ObjectStateFormatter`; `Newtonsoft.Json` with `TypeNameHandling != None` and unconstrained `SerializationBinder`
+   - **Python:** `pickle.loads` / `cPickle`, `shelve`, `marshal.loads`, `dill.loads`, `yaml.load` without `SafeLoader` (already noted in #1 — reinforce here)
+   - **Ruby:** `Marshal.load` on untrusted data, `YAML.load` (older Psych defaults), Rails session storage with `Marshal` and weak secret_key_base
+   - **JavaScript / Node:** `node-serialize.unserialize`, `funcster`, `serialize-javascript` round-tripped from user input
+   - **PHP:** `unserialize()` on user-controllable input (PHP object injection / POP chains); `phar://` stream wrappers triggering deserialization on filesystem ops
+
+9. **Server-Side Request Forgery (SSRF) & Outbound Trust** — Any HTTP/network primitive whose target host/URL is influenced by user input. Cloud workloads with metadata services (AWS `169.254.169.254`, GCP, Azure IMDS) make SSRF a credential-theft primitive even without service interaction.
+   - **Common sinks:** Ruby `Net::HTTP`/`URI.open`/`open()`; Python `requests`/`urllib`/`httpx`/`aiohttp`; JS `fetch`/`axios`/`http(s).request`/`undici`; Go `http.Get`/`http.Client.Do`/`net.Dial`; Java `URL.openConnection`/`HttpClient.send`/`OkHttpClient.newCall`
+   - **Bypass classes to consider:** DNS rebinding, redirect-following to internal IPs, alternate schemes (`file://`, `gopher://`, `dict://`), IPv6/decimal/octal IP encodings, embedded credentials trick (`http://allowed@evil/`)
+   - **Mitigations to look for:** allowlist (not blocklist) of egress hosts; resolution-then-validation (filter on resolved IP, not hostname); `IMDSv2` enforcement; egress firewall rules; libraries with safe-mode flags (`requests` `allow_redirects=False`, `urllib3` no-redirect transports)
+
+10. **Parser, Template, and Regex Injection** — Engines that interpret input as code or grammar:
+    - **XXE (XML External Entity):** parsers that resolve external entities by default. Java `DocumentBuilderFactory` without `setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)`, `SAXParserFactory`, `XMLInputFactory`; .NET `XmlReader`/`XmlDocument` without `XmlReaderSettings.DtdProcessing = Prohibit`; Python `lxml` with `resolve_entities=True`, `xml.etree`, `xml.dom.minidom` (pre-3.7.1); Ruby `Nokogiri` `noent: true` / `dtdload: true`. SOAP/SAML/OOXML libraries are common forgotten surfaces.
+    - **SSTI (Server-Side Template Injection):** template engines fed user-controlled template *bodies* (not just data). Python Jinja2 `Template(user_input)`, Mako `Template(user_input)`; Ruby ERB `ERB.new(user_input)`, Liquid in unsafe mode; Java FreeMarker/Velocity/Thymeleaf with attacker-controlled templates; Go `html/template`/`text/template` already covered in #1.
+    - **ReDoS (Regex DoS):** catastrophic backtracking patterns like `(a+)+$`, `(.*a){10}`, alternation with overlap — particularly when the regex is user-controlled OR the input is. Watch for validation regexes on long inputs without length caps.
 
 For each area:
 1. Read the relevant source code
@@ -292,9 +372,19 @@ Then systematically review the codebase for these vulnerability classes:
 
 1. **IDOR (Insecure Direct Object Reference)** — Can users access or modify resources belonging to other users/tenants? Check that all record lookups are scoped to the authenticated user's permissions.
 
-2. **Mass Assignment** — Are strong parameters properly configured? Look for `permit!`, overly broad `permit` lists, or direct attribute assignment from params.
+2. **Mass Assignment / Permissive Input Binding** — Untrusted input splatted into model attributes:
+   - **Rails:** missing strong parameters, `permit!`, overly broad `permit` lists, direct attribute assignment from `params`
+   - **Django:** `ModelForm` without `Meta.fields` allowlist, `Model.objects.create(**request.data)`, `setattr(obj, k, v) for k, v in request.POST.items()`
+   - **Pydantic/FastAPI:** models with `extra='allow'` or `Config.extra = 'allow'` accepting unspecified fields; mutation of ORM objects from validated Pydantic dump
+   - **JavaScript/Mongoose:** `Model.update(req.body)`, `Object.assign(model, req.body)` without sanitization
+   - **Generic:** any pattern that hands attacker-controlled keys/values to an ORM constructor or update
 
-3. **SQL Injection** — Raw SQL queries, string interpolation in queries, unsafe `where` clauses, `order` with user input.
+3. **SQL Injection** — Raw SQL with untrusted concatenation/interpolation. Parameterized queries are the fix:
+   - **Rails (ActiveRecord):** string-interpolated `where`, unsafe `order`/`group` with user input, raw `find_by_sql`, `connection.execute(unsafe_string)`
+   - **Django ORM:** `raw()`, `extra(where=[user_input])`, `cursor.execute(f"... {user_input} ...")`
+   - **SQLAlchemy:** `text(unsafe_string)`, `Session.execute(unsafe_string)`, `engine.execute(unsafe_string)`
+   - **Node (knex/sequelize/raw pg):** `db.query(\`... ${user_input} ...\`)`, `knex.raw(unsafe)`
+   - **Generic:** any query built via string concatenation/formatting rather than parameter binding
 
 4. **Information Disclosure** — Verbose error messages in production, sensitive data in API responses (passwords, tokens, internal IDs that should be opaque), stack traces.
 
@@ -309,6 +399,16 @@ Then systematically review the codebase for these vulnerability classes:
 9. **Cryptographic Issues** — Weak algorithms, hardcoded keys/IVs, insecure random number generation for security-sensitive operations.
 
 10. **Configuration Security** — Debug mode in production configs, overly permissive file permissions, insecure default settings.
+
+11. **CSRF (Cross-Site Request Forgery)** — State-changing endpoints (POST/PUT/PATCH/DELETE) reachable by browser-bearer auth without anti-CSRF defense. Look for: missing/disabled framework protection (Rails `protect_from_forgery`, Django `CsrfViewMiddleware`, Flask-WTF `CSRFProtect`, Express `csurf` or `SameSite=Lax|Strict` cookies); state-changing GET handlers (a `GET /unsubscribe?id=...` that performs the unsubscribe is exploitable even with CSRF tokens elsewhere); SPA APIs that rely on JWT in `Authorization` header are usually safe — but APIs that also accept cookie auth must defend.
+
+12. **JWT Hygiene** — `jwt.verify` / `jwt.decode` calls without explicit algorithm pinning (alg-confusion: HS256 verified with RS256 public key as HMAC secret); `alg: none` accepted; missing `iss`/`aud`/`exp`/`nbf` validation; weak HMAC secrets (short strings, env-var defaults committed to repo); JWTs passed in URL query strings (logged, in browser history); no key rotation / `kid` not validated against allowlist; refresh tokens with no revocation list.
+
+13. **Open Redirect** — Endpoints that issue HTTP redirects to a target derived from user input without an allowlist. Common patterns: `redirect_to params[:return_to]`, `res.redirect(req.query.next)`, OAuth `redirect_uri` mismatch with registered allowlist, post-login `next=` parameter. Even when "harmless" alone, used in phishing chains and OAuth code theft.
+
+14. **Session Hygiene** — Session ID NOT regenerated after authentication state change (login, privilege elevation) → session fixation; absolute and idle timeouts both missing → indefinite sessions; client-stored session data without integrity protection (HMAC/signed); secure/HttpOnly/SameSite cookie flags missing; session cookie without `__Host-` prefix on production.
+
+15. **Prototype Pollution (JavaScript / Node only)** — Functions that recursively merge attacker-controlled objects into a target: `Object.assign({}, req.body)` with `__proto__` keys, `lodash.merge`/`_.defaultsDeep` in vulnerable versions, custom deep-merge utilities. Sinks: subsequent code that reads from a polluted prototype (e.g., `if (obj.isAdmin)` on plain objects).
 
 For each area, review relevant controllers, models, configuration files, and middleware.
 
@@ -358,7 +458,7 @@ Mark your assigned task as in_progress. Read ALL of the following:
 
 Write the draft report to {PROJECT_ROOT}/security-review/report-draft.md with this structure:
 
-# Security Review — [Project Name]
+# Security Review — {PROJECT_NAME}
 
 ## Review Information
 - **Date:** [today's date]
@@ -435,16 +535,47 @@ Mark your assigned task as in_progress. Read:
 - {PROJECT_ROOT}/security-review/triage/targeted-expert.md
 - {PROJECT_ROOT}/security-review/triage/broad-expert.md
 
-### Step 1: Write Discussion Prompt and Create Feedback Tasks
+### Step 1: Decide Whether a Round Table Is Needed
 
-Write {PROJECT_ROOT}/security-review/roundtable/discussion-prompt.md containing:
+Before spawning the round table, scan the draft report and triage files for ANY of:
+- Severity disagreements flagged by the report writer (the "Severity Disagreements" section)
+- Uncertain findings in any triage file (the "Uncertain Findings" section)
+- Confirmed findings whose `Source:` lists only one analyst (no cross-confirmation)
+- Conflicts between triage files about the same code location
 
-1. The complete draft report (or reference to it)
-2. Specific questions for the round table:
-   - Any severity disagreements flagged by the report writer — present both sides
-   - Any uncertain findings that might be resolvable with cross-agent perspective
-   - Completeness check: "Are there vulnerability classes or code areas that were not adequately covered?"
-   - For each finding: "Is the vulnerability class correct? Is the severity accurate? Is the attack scenario realistic?"
+If NONE of these are present, skip the round table entirely. Write {PROJECT_ROOT}/security-review/roundtable/skipped.md with a brief rationale ("No severity disagreements, no uncertain findings, all findings cross-confirmed by ≥2 analysts — round table skipped per skill guidance"). Then proceed directly to Step 3 using the draft as the basis for `report-final.md` (no consensus changes needed). Add a one-line note in the final report's Round Table Notes section: "Round table skipped — no disagreements or uncertainties to resolve."
+
+Otherwise, proceed to Step 2.
+
+### Step 2: Write Discussion Prompt and Create Feedback Tasks
+
+Write {PROJECT_ROOT}/security-review/roundtable/discussion-prompt.md containing ONLY questions and pointers — **do NOT embed the draft report contents**. Each agent will Read the canonical draft directly via the file path. Embedding it duplicates the draft into 4 agent contexts unnecessarily.
+
+Structure:
+
+```markdown
+# Round Table — Discussion Prompt
+
+**Source documents (Read these directly with the Read tool):**
+- {PROJECT_ROOT}/security-review/report-draft.md — the draft report
+- {PROJECT_ROOT}/security-review/triage/{your-role}.md — your own triage output
+- {PROJECT_ROOT}/security-review/triage/*.md — the other triage outputs
+
+## Questions for the round table
+
+### Severity disagreements
+[List each FINDING-NNN where analysts disagreed on severity, with each side's position in 1-2 sentences]
+
+### Uncertain findings
+[List each uncertain finding by triage file and a one-line description of what's unclear]
+
+### Single-source confirmed findings
+[List FINDING-NNN that only one analyst saw — the others should sanity-check whether they agree]
+
+### Completeness check
+- Are there vulnerability classes or code areas that were not adequately covered?
+- For each finding: Is the vulnerability class correct? Is the severity accurate? Is the attack scenario realistic?
+```
 
 Then create four feedback tasks via TaskCreate, one for each Phase 2 analyst:
 - "Round table: Review draft report and write feedback" — assign to sast-triage
@@ -454,7 +585,8 @@ Then create four feedback tasks via TaskCreate, one for each Phase 2 analyst:
 
 Include in each task description:
 - Read the discussion prompt at {PROJECT_ROOT}/security-review/roundtable/discussion-prompt.md
-- Review the ENTIRE draft report, not just your own findings
+- Read the draft report directly from {PROJECT_ROOT}/security-review/report-draft.md (do NOT expect it to be quoted in the prompt)
+- Review the ENTIRE draft, not just your own findings
 - Challenge findings from other agents: vulnerability class, severity, attack scenario realism
 - Raise any findings you believe were missed or should be reclassified
 - Be specific — reference finding numbers (FINDING-NNN) and provide evidence from the codebase
@@ -462,7 +594,7 @@ Include in each task description:
 
 Then wait for all four feedback tasks to be marked completed.
 
-### Step 2: Process Feedback
+### Step 3: Process Feedback
 
 Read all feedback files from {PROJECT_ROOT}/security-review/roundtable/:
 - sast-triage-feedback.md
@@ -476,13 +608,13 @@ Identify:
 - **New items:** Findings or concerns raised that weren't in the draft
 
 If conflicts exist:
-- Write {PROJECT_ROOT}/security-review/roundtable/round-2-prompt.md with the specific disagreements and each side's position
-- Create rebuttal tasks for the conflicting agents, referencing the round-2-prompt
+- Write {PROJECT_ROOT}/security-review/roundtable/round-N-prompt.md (where N is the round number, starting at 2) with the specific disagreements and each side's position. As with Step 2, do NOT embed the draft — point each agent at the file.
+- Create rebuttal tasks for the conflicting agents, referencing the round-N prompt
 - Wait for rebuttal tasks to complete
 
-Repeat until all items reach consensus or dissent is documented.
+Repeat until all items reach consensus or dissent is documented, **up to a maximum of 3 rounds total** (the initial round plus 2 rebuttal rounds). After round 3, stop the debate, document any remaining dissent in the final report, and proceed to Step 4. The cap exists to prevent infinite loops — if agents cannot agree after three rounds, the disagreement itself is the finding worth reporting.
 
-### Step 3: Finalize Report
+### Step 4: Finalize Report
 
 Write {PROJECT_ROOT}/security-review/report-final.md:
 - Apply all agreed-upon changes to the draft

@@ -1,13 +1,12 @@
 ---
 name: security-review
-description: Use when conducting a security review of a codebase using an agent team with deterministic tools and expert analysis. Triggers on requests to review, audit, or assess security posture of a repository.
+description: Use when reviewing, auditing, or assessing the security posture of a codebase or repository — vulnerability scanning, SAST triage, dependency CVE review, secrets detection.
 allowed-tools:
   - Agent
   - Bash
   - Read
   - Grep
   - Glob
-  - Task
   - TeamCreate
   - TeamDelete
   - SendMessage
@@ -42,6 +41,12 @@ The following tools must be installed on the host machine:
 - **trufflehog** — secrets detection
 - **trivy** — dependency vulnerability scanning
 
+## Configuration Options
+
+The team lead can enable optional analysis modes when the user requests them:
+
+- **Semgrep Pro engine** (`SEMGREP_PRO`, default `false`) — when the user requests it (e.g., "use semgrep pro", "enable pro engine"), pass `SEMGREP_PRO=true` to the tool-runner. Adds `--pro` to the semgrep invocation, enabling interfile/interprocedural taint analysis and Pro languages (Apex, C#, Elixir). Requires the host to have run `semgrep login` and `semgrep install-semgrep-pro` previously; if missing, semgrep will fail with a clear error and the tool-runner will surface it via `tool-runner-errors.md` rather than silently falling back.
+
 ## Output Directory
 
 All artifacts are written to `security-review/` in the project root:
@@ -50,9 +55,11 @@ All artifacts are written to `security-review/` in the project root:
 security-review/
 ├── raw/                              # Phase 1
 │   ├── project-overview.md           # Architecture briefing
-│   ├── semgrep-results.json          # Raw semgrep output
-│   ├── trufflehog-results.json       # Raw trufflehog output
-│   └── trivy-results.json            # Raw trivy output
+│   ├── semgrep-results.json          # Raw semgrep output (JSON)
+│   ├── trufflehog-fs.jsonl           # Raw trufflehog filesystem scan (JSON Lines)
+│   ├── trufflehog-git.jsonl          # Raw trufflehog git history scan (JSON Lines)
+│   ├── trivy-results.json            # Raw trivy output (JSON)
+│   └── tool-runner-errors.md         # (optional) tool failures, if any
 ├── triage/                           # Phase 2
 │   ├── sast-triage.md                # SAST true/false positive analysis
 │   ├── dependency-triage.md          # Exploitable dependency analysis
@@ -68,28 +75,17 @@ security-review/
 
 ## Execution Flow
 
-```
-Phase 1a:  [Project Analyst]
-                |
-Phase 1b:  [Tool Runner]
-                |
-           ┌────┼────────────┬──────────────┐
-Phase 2:   [SAST   ] [Dep     ] [Targeted ] [Broad    ]
-           [Triage ] [Triage  ] [Expert   ] [Expert   ]
-           └────┬────────────┴──────────────┘
-                |
-Phase 3:   [Report Writer]
-                |
-Phase 4:   [Round Table Moderator]
-           ┌────┼────────────┬──────────────┐
-           [SAST   ] [Dep     ] [Targeted ] [Broad    ]
-           [Triage ] [Triage  ] [Expert   ] [Expert   ]
-           └────┬────────────┴──────────────┘
-                |
-           [Moderator finalizes report]
-```
+1. **Phase 1a** — `project-analyst` writes briefing
+2. **Phase 1b** — `tool-runner` runs scanners (depends on 1a)
+3. **Phase 2 (parallel, depend on 1b):**
+   - `sast-triage`
+   - `dep-triage`
+   - `targeted-expert`
+   - `broad-expert`
+4. **Phase 3** — `report-writer` compiles draft (depends on all of Phase 2)
+5. **Phase 4** — `roundtable-moderator` (depends on Phase 3) re-engages the four Phase 2 agents for consensus debate, then writes the final report
 
-**Key:** Phase 2 agents are persistent team members. They do their triage work, go idle, then participate in the round table when the moderator creates feedback tasks.
+**Key:** Phase 2 agents are persistent team members. They do their triage work, go idle, then pick up round-table feedback tasks the moderator creates — same agents, full triage context preserved.
 
 ## Orchestration Steps
 
@@ -97,13 +93,21 @@ You are the **team lead**. You create the team, spawn members, create tasks with
 
 ### Step 1: Setup
 
+First, verify required tools are installed. If any are missing, stop and ask the user to install them before proceeding:
+
 ```bash
-mkdir -p security-review/raw security-review/triage security-review/roundtable
+for tool in semgrep trufflehog trivy; do
+  command -v "$tool" >/dev/null || { echo "missing: $tool"; missing=1; }
+done
+[ -z "$missing" ] || exit 1
+mkdir -p {PROJECT_ROOT}/security-review/raw {PROJECT_ROOT}/security-review/triage {PROJECT_ROOT}/security-review/roundtable
 ```
+
+Determine `{PROJECT_NAME}` (the display name used in the team description and report title) — usually the repo directory name unless the user specifies otherwise.
 
 Then create the team:
 ```
-TeamCreate: team_name="security-review", description="Security review of [project name]"
+TeamCreate: team_name="security-review", description="Repo security review of {PROJECT_NAME}"
 ```
 
 ### Step 2: Create All Tasks Upfront
@@ -147,22 +151,21 @@ Spawn agents using the Agent tool with `team_name="security-review"`. Use prompt
 
 The round table uses the team's task system for multi-agent debate:
 
-1. **Moderator writes discussion prompt** → `security-review/roundtable/discussion-prompt.md`
-2. **Moderator creates feedback tasks** for each Phase 2 agent:
-   - "Review draft report and write feedback" (assigned to sast-triage, dep-triage, targeted-expert, broad-expert)
-   - These tasks are blocked by T8
-3. **Phase 2 agents wake up**, read the discussion prompt, write feedback to their file in `security-review/roundtable/`
-4. **Moderator reads feedback**, identifies conflicts
-5. If conflicts exist, moderator creates rebuttal tasks for the conflicting agents
-6. Repeat until consensus or documented dissent
-7. Moderator writes `security-review/report-final.md`
+1. **Moderator decides whether a round table is needed** — if the draft has no severity disagreements, no uncertain findings, and every confirmed finding has ≥2 analyst sources, the round table is skipped. Moderator writes `roundtable/skipped.md`, copies the draft to `report-final.md` with a brief note, and the phase ends.
+2. **Otherwise, moderator writes discussion prompt** → `security-review/roundtable/discussion-prompt.md` containing only questions and file pointers — does NOT embed the draft (each agent reads the canonical draft directly to avoid 4× duplication).
+3. **Moderator creates feedback tasks** for each Phase 2 agent (sast-triage, dep-triage, targeted-expert, broad-expert), blocked by T8.
+4. **Phase 2 agents wake up**, read the discussion prompt + draft, write feedback to their file in `security-review/roundtable/`
+5. **Moderator reads feedback**, identifies conflicts
+6. If conflicts exist, moderator creates rebuttal tasks for the conflicting agents
+7. Repeat until consensus or documented dissent — capped at 3 rounds total to prevent infinite loops
+8. Moderator writes `security-review/report-final.md`
 
 ### Step 5: Cleanup
 
 After `report-final.md` is written:
 1. Send shutdown messages to all team members
 2. Call TeamDelete to clean up team resources
-3. Notify user that the report is ready at `security-review/report-final.md`
+3. Notify user that the report is ready at `{PROJECT_ROOT}/security-review/report-final.md`
 
 ## Key Principles
 
@@ -191,6 +194,17 @@ If a Phase 2 agent's context is too full to take on round table feedback:
 - If two agents independently found the same issue, merge into one finding
 - Confirmed findings get full write-ups with suggested remediation
 - Uncertain findings go to "Needs Further Investigation" appendix
+
+## Scope Customization
+
+Default behavior is full-repository review. When the user limits scope (e.g., "only the API layer", "skip vendored code"):
+
+1. Add the scope directive to the `project-analyst` prompt as an additional context line — it will be reflected in `project-overview.md` and inherited by all downstream agents.
+2. Pass scope-narrowing flags to `tool-runner`:
+   - **semgrep:** scan specific subpaths instead of `{PROJECT_ROOT}`, or use `--exclude` for vendored directories
+   - **trivy:** use `--skip-dirs` for irrelevant paths
+   - **trufflehog:** point `filesystem` at specific subpaths
+3. Phase 2 agents pick up the scope automatically by reading `project-overview.md`.
 
 ## Common Mistakes
 
