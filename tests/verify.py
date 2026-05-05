@@ -70,6 +70,41 @@ def _read(p: Path) -> str:
         return ""
 
 
+@scenario
+def t1_report_exists(ctx: Context) -> Result:
+    """T1: /security-review actually produced a final report."""
+    p = ctx.report()
+    if p.is_file() and p.stat().st_size > 0:
+        return Result("T1", True, f"{p.relative_to(ctx.repo)} exists and is non-empty")
+    return Result("T1", False, f"{p} missing or empty")
+
+
+@scenario
+def t2_sqli_reported(ctx: Context) -> Result:
+    """T2: the f-string SQLi in app.py appears as a finding."""
+    text = _read(ctx.report()).lower()
+    has_class = "sql injection" in text or "sql-injection" in text or "sqli" in text
+    has_location = "app.py" in text
+    if has_class and has_location:
+        return Result("T2", True, "SQLi finding for app.py present in report")
+    return Result(
+        "T2",
+        False,
+        f"SQLi finding for app.py missing (class={has_class}, location={has_location})",
+    )
+
+
+@scenario
+def t3_cve_reported(ctx: Context) -> Result:
+    """T3: at least one CVE for a pinned dependency appears as a finding."""
+    text = _read(ctx.report())
+    has_cve = bool(re.search(r"CVE-\d{4}-\d+", text))
+    has_pkg = any(pkg in text for pkg in ("urllib3", "requests", "flask", "PyYAML", "pyyaml"))
+    if has_cve and has_pkg:
+        return Result("T3", True, "CVE finding for vulnerable dependency present")
+    return Result("T3", False, f"CVE finding missing (cve_id={has_cve}, pkg={has_pkg})")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", type=Path, default=None)
