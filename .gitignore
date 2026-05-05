@@ -1,0 +1,6 @@
+# Generated security-review output (per-run artifacts)
+tests/fixtures/malicious-target/security-review/
+
+# Python cache
+__pycache__/
+*.pyc
