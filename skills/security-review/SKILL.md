@@ -41,6 +41,7 @@ The following tools must be installed on the host machine:
 - **semgrep** — static analysis
 - **trufflehog** — secrets detection
 - **trivy** — dependency vulnerability scanning
+- **syft** — software bill of materials (SBOM) generation
 - **curl** — exercising the running application during dynamic validation
 
 For the dynamic validation phase, the host should also be able to boot the application (e.g., **docker** / **docker compose**, or the project's native runtime — Ruby, Node, Python, etc.). Dynamic validation is best-effort: if the app cannot be booted, the review still completes and all findings are reported as **Code-Only**.
@@ -55,7 +56,8 @@ security-review/
 │   ├── project-overview.md           # Architecture briefing
 │   ├── semgrep-results.json          # Raw semgrep output
 │   ├── trufflehog-results.json       # Raw trufflehog output
-│   └── trivy-results.json            # Raw trivy output
+│   ├── trivy-results.json            # Raw trivy output
+│   └── sbom.cyclonedx.json           # Syft SBOM (dependency inventory)
 ├── triage/                           # Phase 2
 │   ├── sast-triage.md                # SAST true/false positive analysis
 │   ├── dependency-triage.md          # Exploitable dependency analysis
