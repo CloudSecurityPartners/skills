@@ -21,7 +21,7 @@ allowed-tools:
 
 ## Overview
 
-Create an agent team to conduct a phased security review: project analysis, deterministic tool scanning, parallel expert triage, report writing, and consensus-driven round table. Produces a markdown report with confirmed findings, severity ratings, and an appendix of uncertain items.
+Create an agent team to conduct a phased security review: project analysis, deterministic tool scanning, parallel expert triage, dynamic validation against a running instance, report writing, and consensus-driven round table. Produces a markdown report with confirmed findings, severity ratings, a **validation status** for every finding (dynamically validated vs. code-only), and an appendix of uncertain items.
 
 ## When to Use
 
@@ -41,6 +41,9 @@ The following tools must be installed on the host machine:
 - **semgrep** — static analysis
 - **trufflehog** — secrets detection
 - **trivy** — dependency vulnerability scanning
+- **curl** — exercising the running application during dynamic validation
+
+For the dynamic validation phase, the host should also be able to boot the application (e.g., **docker** / **docker compose**, or the project's native runtime — Ruby, Node, Python, etc.). Dynamic validation is best-effort: if the app cannot be booted, the review still completes and all findings are reported as **Code-Only**.
 
 ## Output Directory
 
@@ -58,6 +61,10 @@ security-review/
 │   ├── dependency-triage.md          # Exploitable dependency analysis
 │   ├── targeted-expert.md            # High-risk area findings
 │   └── broad-expert.md              # General security findings
+├── validation/                       # Phase 2.5
+│   ├── app-setup.md                  # How the app was booted (or why it couldn't be)
+│   ├── dynamic-validation.md         # Per-finding validation status + evidence
+│   └── evidence/                     # Saved requests/responses, repro scripts, logs
 ├── roundtable/                       # Phase 4
 │   ├── discussion-prompt.md
 │   ├── *-feedback.md                 # Per-agent feedback
@@ -77,6 +84,8 @@ Phase 1b:  [Tool Runner]
 Phase 2:   [SAST   ] [Dep     ] [Targeted ] [Broad    ]
            [Triage ] [Triage  ] [Expert   ] [Expert   ]
            └────┬────────────┴──────────────┘
+                |
+Phase 2.5: [Dynamic Validator]   (boots app, reproduces findings)
                 |
 Phase 3:   [Report Writer]
                 |
@@ -98,7 +107,7 @@ You are the **team lead**. You create the team, spawn members, create tasks with
 ### Step 1: Setup
 
 ```bash
-mkdir -p security-review/raw security-review/triage security-review/roundtable
+mkdir -p security-review/raw security-review/triage security-review/validation/evidence security-review/roundtable
 ```
 
 Then create the team:
@@ -118,8 +127,9 @@ Create tasks with dependency chains so agents can self-coordinate. Use `agent-pr
 | T4 | Phase 2: Triage dependency findings | T2 |
 | T5 | Phase 2: Targeted security expert review | T2 |
 | T6 | Phase 2: Broad security expert review | T2 |
-| T7 | Phase 3: Write draft report | T3, T4, T5, T6 |
-| T8 | Phase 4: Moderate round table | T7 |
+| T7 | Phase 2.5: Set up app locally and dynamically validate findings | T3, T4, T5, T6 |
+| T8 | Phase 3: Write draft report | T7 |
+| T9 | Phase 4: Moderate round table | T8 |
 
 **Do not create round table feedback tasks yet.** The moderator will create those in Phase 4 after writing the discussion prompt.
 
@@ -137,11 +147,14 @@ Spawn agents using the Agent tool with `team_name="security-review"`. Use prompt
 5. Spawn `targeted-expert` — assign T5
 6. Spawn `broad-expert` — assign T6
 
-**Phase 3 (after all Phase 2 tasks complete):**
-7. Spawn `report-writer` — assign T7
+**Phase 2.5 (after all Phase 2 tasks complete):**
+7. Spawn `dynamic-validator` — assign T7
+
+**Phase 3 (after T7 completes):**
+8. Spawn `report-writer` — assign T8
 
 **Phase 4:**
-8. Spawn `roundtable-moderator` — assign T8
+9. Spawn `roundtable-moderator` — assign T9
 
 ### Step 4: Phase 4 — Round Table Coordination
 
@@ -150,7 +163,7 @@ The round table uses the team's task system for multi-agent debate:
 1. **Moderator writes discussion prompt** → `security-review/roundtable/discussion-prompt.md`
 2. **Moderator creates feedback tasks** for each Phase 2 agent:
    - "Review draft report and write feedback" (assigned to sast-triage, dep-triage, targeted-expert, broad-expert)
-   - These tasks are blocked by T8
+   - These tasks are blocked by T9
 3. **Phase 2 agents wake up**, read the discussion prompt, write feedback to their file in `security-review/roundtable/`
 4. **Moderator reads feedback**, identifies conflicts
 5. If conflicts exist, moderator creates rebuttal tasks for the conflicting agents
@@ -165,6 +178,21 @@ After `report-final.md` is written:
 3. Notify user that the report is ready at `security-review/report-final.md`
 
 ## Key Principles
+
+### Dynamic Validation Status
+
+Every finding in the final report carries a **Validation Status** so readers know how strong the evidence is:
+
+- **Dynamically Validated** — reproduced against a running instance of the app. Evidence (request/response, repro script, or log excerpt) is saved under `security-review/validation/evidence/` and referenced in the finding.
+- **Code-Only** — confirmed by source-code analysis but not exercised against a running app (either the app couldn't be booted, the path wasn't reachable in the test environment, or dynamic testing was out of scope for that finding).
+- **Validation Inconclusive** — a dynamic test was attempted but neither confirmed nor refuted the finding (e.g., the endpoint required state the validator couldn't reach). Stays a finding, flagged for the round table.
+- **Refuted by Validation** — the dynamic test showed the issue is NOT exploitable as described. The validator documents this; the round table decides whether to downgrade, reclassify as a false positive, or keep with caveats.
+
+Dynamic validation never *creates* findings on its own and never silently drops a code-confirmed finding — it only annotates and provides evidence. A static-only finding is still a real finding.
+
+### Best-Effort App Setup
+
+The validator auto-detects how to run the app (docker-compose, Dockerfile, README, Makefile, language-native commands), proposes a command, and confirms with the user before booting. If the app cannot be booted, the phase does NOT fail — it records why in `validation/app-setup.md` and marks all findings **Code-Only**.
 
 ### Persistent Team Members Over Subagents
 
@@ -201,4 +229,8 @@ If a Phase 2 agent's context is too full to take on round table feedback:
 | Running Phase 2 before tool output exists | Task dependencies (blockedBy) handle gating automatically |
 | Letting agents explore the codebase themselves | All agents read `project-overview.md` first |
 | Skipping round table for small finding count | Always run round table — even 2 findings benefit from cross-review |
+| Failing the review when the app won't boot | App setup is best-effort — record why and mark findings Code-Only, then continue |
+| Booting the app without user confirmation | Validator proposes the run command and confirms before executing it |
+| Running destructive exploit payloads against the app | Validate with minimal, non-destructive proofs; never run payloads that delete/corrupt data |
+| Dropping a code-confirmed finding because it wasn't reproducible | Static-only findings stay — mark Code-Only or Validation Inconclusive, never silently remove |
 | Forgetting to shut down team members | Send shutdown messages and call TeamDelete when done |
