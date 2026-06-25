@@ -80,9 +80,17 @@ Scan for vulnerable dependencies in the project's lock files:
 trivy fs --format json --output {PROJECT_ROOT}/security-review/raw/trivy-results.json --scanners vuln {PROJECT_ROOT}
 ```
 
-### 4. Additional Tool Assessment
+### 4. Syft (SBOM Generation)
 
-After running the three required tools, assess whether additional tool CATEGORIES would provide value. Do not recommend alternatives to semgrep, trufflehog, or trivy — instead consider whether tools covering different analysis categories (e.g., Rails-specific static analysis, infrastructure-as-code scanning, API specification linting) would be useful.
+Generate a software bill of materials (SBOM) cataloging the project's dependencies. This is an inventory artifact — it does not detect vulnerabilities itself, but gives the dependency triage analyst and report a complete, machine-readable list of packages and versions:
+```bash
+syft scan dir:{PROJECT_ROOT} -o cyclonedx-json={PROJECT_ROOT}/security-review/raw/sbom.cyclonedx.json
+```
+If the project is primarily a container image rather than source, you may also point syft at the image (e.g., `syft scan <image>:<tag> ...`). Use the CycloneDX JSON format as shown so the SBOM is portable to downstream tooling.
+
+### 5. Additional Tool Assessment
+
+After running the four required tools, assess whether additional tool CATEGORIES would provide value. Do not recommend alternatives to semgrep, trufflehog, trivy, or syft — instead consider whether tools covering different analysis categories (e.g., Rails-specific static analysis, infrastructure-as-code scanning, API specification linting) would be useful.
 
 For each recommended tool:
 1. Explain what category it covers that the existing tools do not
@@ -164,6 +172,7 @@ TEAM: security-review
 Mark your assigned task as in_progress. Then read:
 - {PROJECT_ROOT}/security-review/raw/project-overview.md (project context)
 - {PROJECT_ROOT}/security-review/raw/trivy-results.json (trivy findings)
+- {PROJECT_ROOT}/security-review/raw/sbom.cyclonedx.json (syft SBOM — complete dependency inventory with versions; use it to cross-check what's actually shipped, spot dependencies trivy may not have flagged, and confirm package/version details)
 - Any additional dependency scanning output in {PROJECT_ROOT}/security-review/raw/ (e.g., bundler-audit-results.json if present).
 
 For EACH CVE/vulnerability reported:
@@ -455,7 +464,7 @@ Write the draft report to {PROJECT_ROOT}/security-review/report-draft.md with th
 ## Review Information
 - **Date:** [today's date]
 - **Scope:** Source code and dependency review
-- **Methodology:** Automated scanning (semgrep, trufflehog, trivy) with expert triage, manual code review, and dynamic validation against a running instance
+- **Methodology:** Automated scanning (semgrep, trufflehog, trivy) and SBOM generation (syft) with expert triage, manual code review, and dynamic validation against a running instance
 - **Reviewed By:** AI security review team (SAST Triage, Dependency Triage, Targeted Security Expert, Broad Security Expert, Dynamic Validator)
 - **Dynamic Validation:** [State whether the app was booted and validated, or "App could not be booted — all findings are code-only", from app-setup.md]
 
